@@ -21,9 +21,10 @@ import time
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.polyglot_type_system.extractors.cpp_extractor import CppTypeExtractor
-from src.polyglot_type_system.storage.rag_storage import RagTypeStorage
-from src.polyglot_type_system.models.type_models import PolyglotType
+from src.extractors.cpp_extractor import CppTypeExtractor
+from src.converters.cpp_to_polyglot import CppToPolyglotConverter
+from src.storage.rag_store import PolyglotRAGStore
+from src.types.polyglot_types import PolyglotType
 
 @dataclass
 class DependencyInfo:
@@ -66,18 +67,18 @@ class CircularDependencyDetector:
         
         # Initialize dependency info for all types
         for t in types:
-            self.dependency_info[t.name] = DependencyInfo()
+            self.dependency_info[t.canonical_name] = DependencyInfo()
         
         # Build dependencies
         for t in types:
             dependencies = self._extract_dependencies(t)
-            self.dependency_graph[t.name] = dependencies
-            self.dependency_info[t.name].depends_on = dependencies
+            self.dependency_graph[t.canonical_name] = dependencies
+            self.dependency_info[t.canonical_name].depends_on = dependencies
             
             # Update reverse dependencies
             for dep in dependencies:
                 if dep in self.dependency_info:
-                    self.dependency_info[dep].used_by.add(t.name)
+                    self.dependency_info[dep].used_by.add(t.canonical_name)
     
     def _extract_dependencies(self, type_obj: PolyglotType) -> Set[str]:
         """Extract dependencies from a type"""
@@ -300,7 +301,7 @@ class UnusedTypeDetector:
     
     def analyze_usage(self, types: List[PolyglotType]) -> Dict[str, List[str]]:
         """Analyze type usage and find unused types"""
-        self.all_types = {t.name for t in types}
+        self.all_types = {t.canonical_name for t in types}
         self.type_usage.clear()
         
         # Build usage map
@@ -337,7 +338,7 @@ class UnusedTypeDetector:
     
     def _analyze_type_usage(self, type_obj: PolyglotType):
         """Analyze how a type uses other types"""
-        type_name = type_obj.name
+        type_name = type_obj.canonical_name
         
         # Base classes
         base_classes = type_obj.metadata.get('base_classes', [])
@@ -387,8 +388,8 @@ class ABICompatibilityChecker:
     def check_compatibility(self, old_types: List[PolyglotType], 
                           new_types: List[PolyglotType]) -> List[ABIChangeInfo]:
         """Check ABI compatibility between two versions"""
-        old_types_map = {t.name: t for t in old_types}
-        new_types_map = {t.name: t for t in new_types}
+        old_types_map = {t.canonical_name: t for t in old_types}
+        new_types_map = {t.canonical_name: t for t in new_types}
         
         changes = []
         
@@ -426,7 +427,7 @@ class ABICompatibilityChecker:
                           new_type: PolyglotType) -> List[ABIChangeInfo]:
         """Check changes in a specific type"""
         changes = []
-        type_name = old_type.name
+        type_name = old_type.canonical_name
         
         # Check field changes
         old_fields = {f['name']: f for f in old_type.metadata.get('fields', [])}
@@ -518,7 +519,7 @@ class ABICompatibilityChecker:
 class TypeAnalysisOrchestrator:
     """Orchestrates all type analysis tools"""
     
-    def __init__(self, storage: RagTypeStorage):
+    def __init__(self, storage: PolyglotRAGStore):
         self.storage = storage
         self.dependency_detector = CircularDependencyDetector()
         self.complexity_analyzer = ComplexityAnalyzer()
@@ -561,7 +562,7 @@ class TypeAnalysisOrchestrator:
         
         for t in types:
             metrics = self.complexity_analyzer.analyze_type_complexity(t)
-            complexity_results[t.name] = {
+            complexity_results[t.canonical_name] = {
                 'cyclomatic_complexity': metrics.cyclomatic_complexity,
                 'inheritance_depth': metrics.inheritance_depth,
                 'coupling': metrics.coupling,
@@ -576,7 +577,7 @@ class TypeAnalysisOrchestrator:
                 metrics.coupling > 8 or 
                 metrics.method_count > 15):
                 high_complexity_types.append({
-                    'name': t.name,
+                    'name': t.canonical_name,
                     'complexity': metrics.cyclomatic_complexity,
                     'coupling': metrics.coupling,
                     'methods': metrics.method_count
@@ -816,22 +817,29 @@ def main():
     extractor = CppTypeExtractor()
     extracted_types = extractor.extract_from_file(str(sample_file))
     
-    print(f"📊 Extracted {len(extracted_types)} types:")
-    for t in extracted_types:
+    # Convert C++ types to PolyglotType objects
+    converter = CppToPolyglotConverter()
+    polyglot_types = []
+    for name, cpp_type in extracted_types.items():
+        poly_type = converter.convert(cpp_type)
+        polyglot_types.append(poly_type)
+    
+    print(f"📊 Extracted {len(polyglot_types)} types:")
+    for t in polyglot_types:
         methods = len(t.metadata.get('methods', []))
         fields = len(t.metadata.get('fields', []))
-        print(f"  - {t.name} ({t.type_kind}): {methods} methods, {fields} fields")
+        print(f"  - {t.canonical_name} ({t.kind}): {methods} methods, {fields} fields")
     
     # Initialize storage and orchestrator
-    storage = RagTypeStorage("analysis_demo")
-    for t in extracted_types:
-        storage.add_type(t)
+    storage = PolyglotRAGStore("analysis_demo")
+    for t in polyglot_types:
+        storage.store_type(t)
     
     orchestrator = TypeAnalysisOrchestrator(storage)
     
     # Run comprehensive analysis
     print(f"\n🔬 Running comprehensive analysis...")
-    analysis_results = orchestrator.run_full_analysis(extracted_types)
+    analysis_results = orchestrator.run_full_analysis(polyglot_types)
     
     # Generate and display report
     report_file = Path(__file__).parent / "type_analysis_report.txt"
@@ -848,9 +856,9 @@ def main():
     print("\n🔍 Demonstrating ABI compatibility checking...")
     
     # Create a modified version of one type for comparison
-    modified_types = extracted_types.copy()
+    modified_types = polyglot_types.copy()
     for t in modified_types:
-        if t.name == "SimplePoint":
+        if t.canonical_name == "SimplePoint":
             # Add a field to simulate ABI change
             t.metadata.setdefault('fields', []).append({
                 'name': 'z',
@@ -859,7 +867,7 @@ def main():
             })
             break
     
-    abi_changes = orchestrator.abi_checker.check_compatibility(extracted_types, modified_types)
+    abi_changes = orchestrator.abi_checker.check_compatibility(polyglot_types, modified_types)
     
     if abi_changes:
         print("⚠️  ABI Changes Detected:")

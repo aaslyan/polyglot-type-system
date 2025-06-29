@@ -16,8 +16,9 @@ from dataclasses import dataclass
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.polyglot_type_system.extractors.cpp_extractor import CppTypeExtractor
-from src.polyglot_type_system.models.type_models import PolyglotType
+from src.extractors.cpp_extractor import CppTypeExtractor
+from src.converters.cpp_to_polyglot import CppToPolyglotConverter
+from src.types.polyglot_types import PolyglotType
 
 @dataclass
 class LanguageMapping:
@@ -119,7 +120,7 @@ class CrossLanguageMapper:
     def generate_bindings(self, polyglot_type: PolyglotType, target_language: str) -> Dict[str, Any]:
         """Generate language bindings for a polyglot type"""
         bindings = {
-            "original_type": polyglot_type.name,
+            "original_type": polyglot_type.canonical_name,
             "target_language": target_language,
             "mapped_type": None,
             "imports": [],
@@ -127,7 +128,7 @@ class CrossLanguageMapper:
         }
         
         # Try direct mapping first
-        mapping = self.map_type(polyglot_type.name, target_language)
+        mapping = self.map_type(polyglot_type.canonical_name, target_language)
         if mapping:
             bindings["mapped_type"] = mapping.type_name
             if mapping.import_statement:
@@ -136,7 +137,7 @@ class CrossLanguageMapper:
                 bindings["notes"].append(mapping.notes)
         
         # Handle class/struct mappings
-        if polyglot_type.type_kind == "class" or polyglot_type.type_kind == "struct":
+        if polyglot_type.kind == "class" or polyglot_type.kind == "struct":
             bindings["mapped_type"] = self._generate_class_binding(polyglot_type, target_language)
         
         return bindings
@@ -149,14 +150,14 @@ class CrossLanguageMapper:
             return self._generate_typescript_interface(polyglot_type)
         elif target_language == "java":
             return self._generate_java_class(polyglot_type)
-        return polyglot_type.name
+        return polyglot_type.canonical_name
     
     def _generate_python_class(self, polyglot_type: PolyglotType) -> str:
         """Generate Python class definition"""
         methods = polyglot_type.metadata.get("methods", [])
         fields = polyglot_type.metadata.get("fields", [])
         
-        class_def = f"class {polyglot_type.name}:\n"
+        class_def = f"class {polyglot_type.canonical_name}:\n"
         
         if fields:
             class_def += "    def __init__(self):\n"
@@ -176,7 +177,7 @@ class CrossLanguageMapper:
         methods = polyglot_type.metadata.get("methods", [])
         fields = polyglot_type.metadata.get("fields", [])
         
-        interface_def = f"interface {polyglot_type.name} {{\n"
+        interface_def = f"interface {polyglot_type.canonical_name} {{\n"
         
         for field in fields:
             field_type = self._map_field_type(field['type'], 'typescript')
@@ -196,7 +197,7 @@ class CrossLanguageMapper:
         methods = polyglot_type.metadata.get("methods", [])
         fields = polyglot_type.metadata.get("fields", [])
         
-        class_def = f"public class {polyglot_type.name} {{\n"
+        class_def = f"public class {polyglot_type.canonical_name} {{\n"
         
         for field in fields:
             field_type = self._map_field_type(field['type'], 'java')
@@ -254,12 +255,19 @@ struct UserProfile {
     
     extracted_types = extractor.extract_from_file(str(cpp_file))
     
+    # Convert C++ types to PolyglotType objects
+    converter = CppToPolyglotConverter()
+    polyglot_types = {}
+    for name, cpp_type in extracted_types.items():
+        poly_type = converter.convert(cpp_type)
+        polyglot_types[name] = poly_type
+    
     print("=" * 80)
     print("Cross-Language Type Mapping Examples")
     print("=" * 80)
     
-    for polyglot_type in extracted_types:
-        print(f"\n📄 Original C++ Type: {polyglot_type.name}")
+    for polyglot_type in polyglot_types.values():
+        print(f"\n📄 Original C++ Type: {polyglot_type.canonical_name}")
         print("-" * 50)
         
         # Generate mappings for each target language

@@ -21,9 +21,10 @@ import hashlib
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.polyglot_type_system.extractors.cpp_extractor import CppTypeExtractor
-from src.polyglot_type_system.storage.rag_storage import RagTypeStorage
-from src.polyglot_type_system.models.type_models import PolyglotType
+from src.extractors.cpp_extractor import CppTypeExtractor
+from src.converters.cpp_to_polyglot import CppToPolyglotConverter
+from src.storage.rag_store import PolyglotRAGStore
+from src.types.polyglot_types import PolyglotType
 
 @dataclass
 class ProcessingStats:
@@ -104,7 +105,7 @@ class BatchTypeProcessor:
     
     def __init__(self, storage_name: str = "batch_processing_db", max_workers: int = 4):
         self.extractor = CppTypeExtractor()
-        self.storage = RagTypeStorage(storage_name)
+        self.storage = PolyglotRAGStore(storage_name)
         self.max_workers = max_workers
         self.incremental_processor = IncrementalProcessor()
     
@@ -143,12 +144,19 @@ class BatchTypeProcessor:
             # Extract types
             extracted_types = self.extractor.extract_from_file(str(file_path))
             
+            # Convert C++ types to PolyglotType objects
+            converter = CppToPolyglotConverter()
+            polyglot_types = {}
+            for name, cpp_type in extracted_types.items():
+                poly_type = converter.convert(cpp_type)
+                polyglot_types[name] = poly_type
+            
             # Store types in RAG
-            for polyglot_type in extracted_types:
+            for poly_type in polyglot_types.values():
                 # Add file source metadata
-                polyglot_type.metadata['source_file'] = str(file_path)
-                polyglot_type.metadata['extraction_timestamp'] = time.time()
-                self.storage.add_type(polyglot_type)
+                poly_type.metadata['source_file'] = str(file_path)
+                poly_type.metadata['extraction_timestamp'] = time.time()
+                self.storage.store_type(poly_type)
             
             # Mark as processed
             self.incremental_processor.mark_processed(file_path)
@@ -157,7 +165,7 @@ class BatchTypeProcessor:
             return FileProcessingResult(
                 file_path=str(file_path),
                 success=True,
-                types_extracted=len(extracted_types),
+                types_extracted=len(polyglot_types),
                 processing_time=processing_time,
                 file_hash=self.incremental_processor._calculate_file_hash(file_path)
             )
@@ -438,7 +446,7 @@ def main():
             filename = Path(file_path).name
             print(f"  📄 {filename}: {len(types)} types")
             for t in types[:3]:  # Show first 3 types
-                print(f"    - {t.name} ({t.type_kind})")
+                print(f"    - {t.canonical_name} ({t.kind})")
             if len(types) > 3:
                 print(f"    ... and {len(types) - 3} more")
 

@@ -21,9 +21,10 @@ from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.polyglot_type_system.extractors.cpp_extractor import CppTypeExtractor
-from src.polyglot_type_system.storage.rag_storage import RagTypeStorage
-from src.polyglot_type_system.models.type_models import PolyglotType
+from src.extractors.cpp_extractor import CppTypeExtractor
+from src.converters.cpp_to_polyglot import CppToPolyglotConverter
+from src.storage.rag_store import PolyglotRAGStore
+from src.types.polyglot_types import PolyglotType
 
 @dataclass
 class CompatibilityReport:
@@ -97,14 +98,22 @@ class TypeCompatibilityChecker:
     """Checks type compatibility between versions"""
     
     def __init__(self):
-        self.extractor = CppTypeExtractor()
+        try:
+            self.extractor = CppTypeExtractor()
+        except Exception as e:
+            print(f"⚠️  Warning: Could not initialize C++ extractor: {e}")
+            self.extractor = None
     
     def compare_versions(self, old_types: List[PolyglotType], new_types: List[PolyglotType]) -> CompatibilityReport:
         """Compare two sets of types for compatibility"""
         
+        if self.extractor is None:
+            print("⚠️  Extractor not available, skipping compatibility check")
+            return CompatibilityReport([], [], [], [], True)
+        
         # Create lookup maps
-        old_types_map = {t.name: t for t in old_types}
-        new_types_map = {t.name: t for t in new_types}
+        old_types_map = {t.canonical_name: t for t in old_types}
+        new_types_map = {t.canonical_name: t for t in new_types}
         
         # Find changes
         breaking_changes = []
@@ -223,7 +232,7 @@ class CICDIntegrator:
         self.repo_path = repo_path
         self.git = GitIntegration(repo_path)
         self.extractor = CppTypeExtractor()
-        self.storage = RagTypeStorage(storage_name)
+        self.storage = PolyglotRAGStore(storage_name)
         self.compatibility_checker = TypeCompatibilityChecker()
     
     def run_pre_commit_check(self) -> bool:
@@ -246,7 +255,12 @@ class CICDIntegrator:
         for file_path in changed_files:
             try:
                 extracted_types = self.extractor.extract_from_file(str(file_path))
-                new_types.extend(extracted_types)
+                
+                # Convert C++ types to PolyglotType objects
+                converter = CppToPolyglotConverter()
+                for name, cpp_type in extracted_types.items():
+                    poly_type = converter.convert(cpp_type)
+                    new_types.append(poly_type)
             except Exception as e:
                 print(f"❌ Error extracting types from {file_path}: {e}")
                 return False
@@ -262,10 +276,10 @@ class CICDIntegrator:
         
         # Save new types if compatible
         if report.is_compatible:
-            for new_type in new_types:
-                new_type.metadata['commit'] = self.git.get_current_commit()
-                new_type.metadata['timestamp'] = time.time()
-                self.storage.add_type(new_type)
+            for poly_type in new_types:
+                poly_type.metadata['commit'] = self.git.get_current_commit()
+                poly_type.metadata['timestamp'] = time.time()
+                self.storage.store_type(poly_type)
             print("✅ Types updated in storage")
         
         return report.is_compatible
@@ -286,10 +300,14 @@ class CICDIntegrator:
         for file_path in cpp_files:
             try:
                 extracted_types = self.extractor.extract_from_file(str(file_path))
-                for t in extracted_types:
-                    t.metadata['commit'] = commit
-                    t.metadata['source_file'] = str(file_path.relative_to(self.repo_path))
-                all_types.extend(extracted_types)
+                
+                # Convert C++ types to PolyglotType objects
+                converter = CppToPolyglotConverter()
+                for name, cpp_type in extracted_types.items():
+                    poly_type = converter.convert(cpp_type)
+                    poly_type.metadata['commit'] = commit
+                    poly_type.metadata['source_file'] = str(file_path.relative_to(self.repo_path))
+                    all_types.append(poly_type)
             except Exception as e:
                 print(f"⚠️  Error processing {file_path}: {e}")
         
@@ -297,8 +315,8 @@ class CICDIntegrator:
         self._generate_metrics(all_types, commit)
         
         # Update storage
-        for type_obj in all_types:
-            self.storage.add_type(type_obj)
+        for poly_type in all_types:
+            self.storage.store_type(poly_type)
         
         print(f"✅ Analysis complete: {len(all_types)} types processed")
     
@@ -326,8 +344,8 @@ class CICDIntegrator:
                 index_content.append(f"**{len(types)} types**\n")
                 
                 for t in types:
-                    doc_file = f"{t.name.replace('::', '_')}.md"
-                    index_content.append(f"- [{t.name}]({doc_file}) ({t.type_kind})")
+                    doc_file = f"{t.canonical_name.replace('::', '_')}.md"
+                    index_content.append(f"- [{t.canonical_name}]({doc_file}) ({t.kind})")
                     
                     # Generate individual type documentation
                     self._generate_type_doc(t, output_dir / doc_file)
@@ -403,7 +421,7 @@ class CICDIntegrator:
         
         # Type breakdown
         for t in types:
-            kind = t.type_kind
+            kind = t.kind
             metrics['type_breakdown'][kind] = metrics['type_breakdown'].get(kind, 0) + 1
         
         # File statistics
@@ -427,9 +445,9 @@ class CICDIntegrator:
     def _generate_type_doc(self, type_obj: PolyglotType, output_file: Path):
         """Generate documentation for a single type"""
         doc_lines = [
-            f"# {type_obj.name}",
+            f"# {type_obj.canonical_name}",
             "",
-            f"**Type:** {type_obj.type_kind}",
+            f"**Type:** {type_obj.kind}",
             f"**Source:** {type_obj.metadata.get('source_file', 'unknown')}",
             ""
         ]

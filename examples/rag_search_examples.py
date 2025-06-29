@@ -17,14 +17,15 @@ import json
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.polyglot_type_system.extractors.cpp_extractor import CppTypeExtractor
-from src.polyglot_type_system.storage.rag_storage import RagTypeStorage
-from src.polyglot_type_system.models.type_models import PolyglotType
+from src.extractors.cpp_extractor import CppTypeExtractor
+from src.converters.cpp_to_polyglot import CppToPolyglotConverter
+from src.storage.rag_store import PolyglotRAGStore
+from src.types.polyglot_types import PolyglotType, TypeKind
 
 class AdvancedTypeSearcher:
     """Advanced search operations on the RAG storage"""
     
-    def __init__(self, storage: RagTypeStorage):
+    def __init__(self, storage: PolyglotRAGStore):
         self.storage = storage
     
     def find_similar_types(self, query_type: PolyglotType, similarity_threshold: float = 0.7) -> List[PolyglotType]:
@@ -126,7 +127,7 @@ class AdvancedTypeSearcher:
         for stored_type in all_types:
             type_methods = [m.get('name', '').lower() for m in stored_type.metadata.get('methods', [])]
             type_fields = [f.get('name', '').lower() for f in stored_type.metadata.get('fields', [])]
-            all_names = type_methods + type_fields + [stored_type.name.lower()]
+            all_names = type_methods + type_fields + [stored_type.canonical_name.lower()]
             
             if any(keyword in ' '.join(all_names) for keyword in keywords):
                 matching_types.append(stored_type)
@@ -147,13 +148,13 @@ class AdvancedTypeSearcher:
     
     def _calculate_structural_similarity(self, type1: PolyglotType, type2: PolyglotType) -> float:
         """Calculate structural similarity between two types"""
-        if type1.name == type2.name:
+        if type1.canonical_name == type2.canonical_name:
             return 1.0
         
         score = 0.0
         
         # Compare type kinds
-        if type1.type_kind == type2.type_kind:
+        if type1.kind == type2.kind:
             score += 0.3
         
         # Compare number of methods
@@ -212,8 +213,8 @@ def create_sample_types() -> List[PolyglotType]:
     """Create sample types for demonstration"""
     sample_types = [
         PolyglotType(
-            name="Logger",
-            type_kind="class",
+            canonical_name="Logger",
+            kind=TypeKind.OBJECT,
             metadata={
                 "methods": [
                     {"name": "log", "parameters": [{"name": "message", "type": "std::string"}]},
@@ -224,8 +225,8 @@ def create_sample_types() -> List[PolyglotType]:
             }
         ),
         PolyglotType(
-            name="EventHandler",
-            type_kind="class",
+            canonical_name="EventHandler",
+            kind=TypeKind.OBJECT,
             metadata={
                 "methods": [
                     {"name": "subscribe", "parameters": [{"name": "callback", "type": "std::function<void()>"}]},
@@ -236,8 +237,8 @@ def create_sample_types() -> List[PolyglotType]:
             }
         ),
         PolyglotType(
-            name="VectorIterator",
-            type_kind="class",
+            canonical_name="VectorIterator",
+            kind=TypeKind.OBJECT,
             metadata={
                 "methods": [
                     {"name": "next", "return_type": "T&"},
@@ -249,8 +250,8 @@ def create_sample_types() -> List[PolyglotType]:
             }
         ),
         PolyglotType(
-            name="Shape",
-            type_kind="class",
+            canonical_name="Shape",
+            kind=TypeKind.OBJECT,
             metadata={
                 "methods": [
                     {"name": "area", "return_type": "double", "is_virtual": True},
@@ -259,8 +260,8 @@ def create_sample_types() -> List[PolyglotType]:
             }
         ),
         PolyglotType(
-            name="Circle",
-            type_kind="class",
+            canonical_name="Circle",
+            kind=TypeKind.OBJECT,
             metadata={
                 "base_classes": ["Shape"],
                 "methods": [
@@ -283,13 +284,13 @@ def main():
     print("=" * 80)
     
     # Initialize storage and searcher
-    storage = RagTypeStorage("rag_search_demo")
+    storage = PolyglotRAGStore("rag_search_demo")
     searcher = AdvancedTypeSearcher(storage)
     
     # Create and add sample types
     sample_types = create_sample_types()
     for sample_type in sample_types:
-        storage.add_type(sample_type)
+        storage.store_type(sample_type)
     
     print(f"\n📊 Added {len(sample_types)} sample types to storage")
     
@@ -297,7 +298,7 @@ def main():
     print("\n🔍 1. Finding Types with Specific Interface:")
     iterable_types = searcher.find_types_with_interface(["next", "has_next"])
     for t in iterable_types:
-        print(f"   - {t.name}: implements Iterator pattern")
+        print(f"   - {t.canonical_name}: implements Iterator pattern")
     
     print("\n🔍 2. Finding Types by Usage Pattern:")
     patterns = ["Singleton", "Observer", "Iterator"]
@@ -306,30 +307,30 @@ def main():
         if pattern_types:
             print(f"   {pattern} Pattern:")
             for t in pattern_types:
-                print(f"     - {t.name}")
+                print(f"     - {t.canonical_name}")
     
     print("\n🔍 3. Finding Polymorphic Types:")
     polymorphic_types = searcher.find_polymorphic_types()
     for t in polymorphic_types:
         virtual_methods = [m['name'] for m in t.metadata.get('methods', []) if m.get('is_virtual')]
-        print(f"   - {t.name}: virtual methods = {virtual_methods}")
+        print(f"   - {t.canonical_name}: virtual methods = {virtual_methods}")
     
     print("\n🔍 4. Types by Complexity:")
     complex_types = searcher.find_types_by_complexity(min_complexity=3)
     for t in complex_types:
         complexity = searcher._calculate_complexity(t)
-        print(f"   - {t.name}: complexity score = {complexity}")
+        print(f"   - {t.canonical_name}: complexity score = {complexity}")
     
     print("\n🔍 5. Finding Similar Types:")
     # Find types similar to Circle
-    circle_type = next((t for t in sample_types if t.name == "Circle"), None)
+    circle_type = next((t for t in sample_types if t.canonical_name == "Circle"), None)
     if circle_type:
         similar_types = searcher.find_similar_types(circle_type, similarity_threshold=0.3)
-        print(f"   Types similar to {circle_type.name}:")
+        print(f"   Types similar to {circle_type.canonical_name}:")
         for t in similar_types:
-            if t.name != circle_type.name:  # Don't show the type itself
+            if t.canonical_name != circle_type.canonical_name:  # Don't show the type itself
                 similarity = searcher._calculate_structural_similarity(circle_type, t)
-                print(f"     - {t.name}: similarity = {similarity:.2f}")
+                print(f"     - {t.canonical_name}: similarity = {similarity:.2f}")
     
     # Demonstrate semantic search with extracted C++ types
     print("\n" + "=" * 80)
@@ -343,11 +344,18 @@ def main():
     if cpp_file.exists():
         extracted_types = extractor.extract_from_file(str(cpp_file))
         
-        # Add extracted types to storage
-        for extracted_type in extracted_types:
-            storage.add_type(extracted_type)
+        # Convert C++ types to PolyglotType objects
+        converter = CppToPolyglotConverter()
+        polyglot_types = {}
+        for name, cpp_type in extracted_types.items():
+            poly_type = converter.convert(cpp_type)
+            polyglot_types[name] = poly_type
         
-        print(f"\n📄 Added {len(extracted_types)} extracted C++ types")
+        # Add extracted types to storage
+        for poly_type in polyglot_types.values():
+            storage.store_type(poly_type)
+        
+        print(f"\n📄 Added {len(polyglot_types)} extracted C++ types")
         
         # Search for container types
         container_types = searcher.find_container_types()
@@ -357,7 +365,7 @@ def main():
                                if any(indicator in m['name'].lower() 
                                      for indicator in ['size', 'begin', 'end', 'empty'])]
             if container_methods:
-                print(f"   - {t.name}: {container_methods}")
+                print(f"   - {t.canonical_name}: {container_methods}")
     
     # Demonstrate metadata-based search
     print("\n🔍 Metadata-Based Search Examples:")
@@ -368,7 +376,7 @@ def main():
     print(f"\n📋 Template Types ({len(template_types)} found):")
     for t in template_types:
         params = t.metadata.get('template_params', [])
-        print(f"   - {t.name}<{', '.join(params)}>")
+        print(f"   - {t.canonical_name}<{', '.join(params)}>")
     
     # Search by inheritance
     derived_types = [t for t in storage.get_all_types() 
@@ -376,7 +384,7 @@ def main():
     print(f"\n🌳 Types with Inheritance ({len(derived_types)} found):")
     for t in derived_types:
         bases = t.metadata.get('base_classes', [])
-        print(f"   - {t.name} extends {', '.join(bases)}")
+        print(f"   - {t.canonical_name} extends {', '.join(bases)}")
 
 if __name__ == "__main__":
     main()

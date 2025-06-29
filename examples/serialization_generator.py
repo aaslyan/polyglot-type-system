@@ -18,8 +18,9 @@ from textwrap import indent
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.polyglot_type_system.extractors.cpp_extractor import CppTypeExtractor
-from src.polyglot_type_system.models.type_models import PolyglotType
+from src.extractors.cpp_extractor import CppTypeExtractor
+from src.converters.cpp_to_polyglot import CppToPolyglotConverter
+from src.types.polyglot_types import PolyglotType
 
 @dataclass
 class SerializationConfig:
@@ -64,7 +65,7 @@ class JSONSerializationGenerator:
         
         # Generate serialization functions for each type
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 serialization_code = self._generate_type_serialization(type_obj)
                 lines.append(indent(serialization_code, "    "))
                 lines.append("")
@@ -75,7 +76,7 @@ class JSONSerializationGenerator:
     
     def _generate_type_serialization(self, type_obj: PolyglotType) -> str:
         """Generate serialization for a single type"""
-        class_name = type_obj.name
+        class_name = type_obj.canonical_name
         
         lines = [
             f"// Serialization for {class_name}",
@@ -164,7 +165,7 @@ class ProtobufGenerator:
         field_counter = 1
         
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 message_def = self._generate_message(type_obj, field_counter)
                 lines.append(message_def)
                 lines.append("")
@@ -174,7 +175,7 @@ class ProtobufGenerator:
     
     def _generate_message(self, type_obj: PolyglotType, start_field_num: int) -> str:
         """Generate protobuf message for a type"""
-        class_name = type_obj.name.replace("::", "_")
+        class_name = type_obj.canonical_name.replace("::", "_")
         
         lines = [
             f"message {class_name} {{",
@@ -250,7 +251,7 @@ class MessagePackGenerator:
         
         # Generate MSGPACK_DEFINE macros for each type
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 msgpack_code = self._generate_msgpack_macro(type_obj)
                 lines.append(indent(msgpack_code, "    "))
                 lines.append("")
@@ -261,7 +262,7 @@ class MessagePackGenerator:
     
     def _generate_msgpack_macro(self, type_obj: PolyglotType) -> str:
         """Generate MSGPACK_DEFINE macro for a type"""
-        class_name = type_obj.name
+        class_name = type_obj.canonical_name
         fields = type_obj.metadata.get('fields', [])
         
         if not fields:
@@ -369,7 +370,7 @@ class BinaryFormatGenerator:
         
         # Generate serialization methods for each type
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 serialization_methods = self._generate_binary_methods(type_obj)
                 lines.append(indent(serialization_methods, "    "))
                 lines.append("")
@@ -384,7 +385,7 @@ class BinaryFormatGenerator:
     
     def _generate_binary_methods(self, type_obj: PolyglotType) -> str:
         """Generate binary serialization methods for a type"""
-        class_name = type_obj.name
+        class_name = type_obj.canonical_name
         method_name = class_name.replace("::", "_").lower()
         
         lines = [
@@ -569,17 +570,24 @@ def main():
     extractor = CppTypeExtractor()
     extracted_types = extractor.extract_from_file(str(sample_file))
     
-    print(f"📊 Extracted {len(extracted_types)} types:")
-    for t in extracted_types:
+    # Convert C++ types to PolyglotType objects
+    converter = CppToPolyglotConverter()
+    polyglot_types = []
+    for name, cpp_type in extracted_types.items():
+        poly_type = converter.convert(cpp_type)
+        polyglot_types.append(poly_type)
+    
+    print(f"📊 Extracted {len(polyglot_types)} types:")
+    for t in polyglot_types:
         fields = t.metadata.get('fields', [])
-        print(f"  - {t.name} ({t.type_kind}) - {len(fields)} fields")
+        print(f"  - {t.canonical_name} ({t.kind}) - {len(fields)} fields")
     
     # Generate serialization code
     output_dir = Path(__file__).parent / "generated_serialization"
     orchestrator = SerializationOrchestrator(output_dir)
     
     print(f"\n🔧 Generating serialization code in {output_dir}...")
-    orchestrator.generate_all_formats(extracted_types, "sample_types")
+    orchestrator.generate_all_formats(polyglot_types, "sample_types")
     
     print(f"\n📁 Generated files:")
     for file_path in output_dir.iterdir():

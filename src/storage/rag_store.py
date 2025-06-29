@@ -118,6 +118,58 @@ class PolyglotRAGStore:
                     return json.load(f)
         return None
     
+    def get_all_types(self) -> List[PolyglotType]:
+        """Get all stored types"""
+        all_types = []
+        for type_id in self.store.get("types", {}):
+            type_data = self.load_type(type_id)
+            if type_data:
+                # Convert dict back to PolyglotType
+                from ..types.polyglot_types import TypeKind
+                poly_type = PolyglotType(
+                    canonical_name=type_data["canonical_name"],
+                    kind=TypeKind(type_data["kind"]),
+                    source_language=type_data.get("source_language", "cpp"),
+                    metadata=type_data.get("metadata", {})
+                )
+                all_types.append(poly_type)
+        return all_types
+    
+    def search_by_metadata(self, metadata_filters: Dict[str, Any]) -> List[PolyglotType]:
+        """Search types by metadata criteria"""
+        matching_types = []
+        all_types = self.get_all_types()
+        
+        for poly_type in all_types:
+            metadata = poly_type.metadata
+            matches = True
+            
+            for key, value in metadata_filters.items():
+                if key not in metadata or metadata[key] != value:
+                    matches = False
+                    break
+            
+            if matches:
+                matching_types.append(poly_type)
+        
+        return matching_types
+    
+    def search_by_content(self, content_query: str) -> List[PolyglotType]:
+        """Search types by content in their string representation"""
+        matching_types = []
+        all_types = self.get_all_types()
+        
+        for poly_type in all_types:
+            # Check if query matches in the type's text representation
+            type_text = self._create_document_text(poly_type).lower()
+            metadata_text = str(poly_type.metadata).lower()
+            
+            if (content_query.lower() in type_text or 
+                content_query.lower() in metadata_text):
+                matching_types.append(poly_type)
+        
+        return matching_types
+    
     def _create_document_text(self, poly_type: PolyglotType) -> str:
         """Create searchable document text"""
         parts = [

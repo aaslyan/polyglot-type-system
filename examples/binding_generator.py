@@ -18,9 +18,10 @@ from textwrap import indent
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.polyglot_type_system.extractors.cpp_extractor import CppTypeExtractor
-from src.polyglot_type_system.storage.rag_storage import RagTypeStorage
-from src.polyglot_type_system.models.type_models import PolyglotType
+from src.extractors.cpp_extractor import CppTypeExtractor
+from src.converters.cpp_to_polyglot import CppToPolyglotConverter
+from src.storage.rag_store import PolyglotRAGStore
+from src.types.polyglot_types import PolyglotType
 
 @dataclass
 class BindingConfig:
@@ -68,7 +69,7 @@ class PythonBindingGenerator:
         
         # Generate bindings for each type
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 class_binding = self._generate_class_binding(type_obj)
                 lines.append(indent(class_binding, "    "))
                 lines.append("")
@@ -79,7 +80,7 @@ class PythonBindingGenerator:
     
     def _generate_class_binding(self, type_obj: PolyglotType) -> str:
         """Generate binding for a single class"""
-        class_name = type_obj.name
+        class_name = type_obj.canonical_name
         binding_name = class_name.replace("::", "_")
         
         lines = [
@@ -158,7 +159,7 @@ class NodeJSBindingGenerator:
         
         # Generate wrapper classes
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 wrapper_class = self._generate_wrapper_class(type_obj)
                 lines.append(wrapper_class)
                 lines.append("")
@@ -169,9 +170,9 @@ class NodeJSBindingGenerator:
         ])
         
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
-                wrapper_name = f"{type_obj.name.replace('::', '')}Wrapper"
-                export_name = type_obj.name.split("::")[-1]
+            if type_obj.kind in ['class', 'struct']:
+                wrapper_name = f"{type_obj.canonical_name.replace('::', '')}Wrapper"
+                export_name = type_obj.canonical_name.split("::")[-1]
                 lines.append(f'    exports.Set("{export_name}", {wrapper_name}::GetClass(env));')
         
         lines.extend([
@@ -185,7 +186,7 @@ class NodeJSBindingGenerator:
     
     def _generate_wrapper_class(self, type_obj: PolyglotType) -> str:
         """Generate N-API wrapper class"""
-        class_name = type_obj.name
+        class_name = type_obj.canonical_name
         wrapper_name = f"{class_name.replace('::', '')}Wrapper"
         
         lines = [
@@ -246,9 +247,9 @@ class JSONSchemaGenerator:
         }
         
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 type_schema = self._generate_type_schema(type_obj)
-                schema["definitions"][type_obj.name] = type_schema
+                schema["definitions"][type_obj.canonical_name] = type_schema
         
         return schema
     
@@ -333,9 +334,9 @@ class OpenAPIGenerator:
         
         # Generate schemas from types
         for type_obj in types:
-            if type_obj.type_kind in ['class', 'struct']:
+            if type_obj.kind in ['class', 'struct']:
                 schema = self._generate_openapi_schema(type_obj)
-                spec["components"]["schemas"][type_obj.name] = schema
+                spec["components"]["schemas"][type_obj.canonical_name] = schema
                 
                 # Generate basic CRUD paths
                 paths = self._generate_crud_paths(type_obj)
@@ -389,13 +390,13 @@ class OpenAPIGenerator:
     
     def _generate_crud_paths(self, type_obj: PolyglotType) -> Dict[str, Any]:
         """Generate basic CRUD paths for a type"""
-        type_name = type_obj.name.lower()
-        schema_ref = f"#/components/schemas/{type_obj.name}"
+        type_name = type_obj.canonical_name.lower()
+        schema_ref = f"#/components/schemas/{type_obj.canonical_name}"
         
         return {
             f"/{type_name}": {
                 "post": {
-                    "summary": f"Create {type_obj.name}",
+                    "summary": f"Create {type_obj.canonical_name}",
                     "requestBody": {
                         "content": {
                             "application/json": {
@@ -405,7 +406,7 @@ class OpenAPIGenerator:
                     },
                     "responses": {
                         "201": {
-                            "description": f"{type_obj.name} created",
+                            "description": f"{type_obj.canonical_name} created",
                             "content": {
                                 "application/json": {
                                     "schema": {"$ref": schema_ref}
@@ -415,10 +416,10 @@ class OpenAPIGenerator:
                     }
                 },
                 "get": {
-                    "summary": f"List {type_obj.name} objects",
+                    "summary": f"List {type_obj.canonical_name} objects",
                     "responses": {
                         "200": {
-                            "description": f"List of {type_obj.name} objects",
+                            "description": f"List of {type_obj.canonical_name} objects",
                             "content": {
                                 "application/json": {
                                     "schema": {
@@ -433,7 +434,7 @@ class OpenAPIGenerator:
             },
             f"/{type_name}/{{id}}": {
                 "get": {
-                    "summary": f"Get {type_obj.name} by ID",
+                    "summary": f"Get {type_obj.canonical_name} by ID",
                     "parameters": [
                         {
                             "name": "id",
@@ -444,7 +445,7 @@ class OpenAPIGenerator:
                     ],
                     "responses": {
                         "200": {
-                            "description": f"{type_obj.name} object",
+                            "description": f"{type_obj.canonical_name} object",
                             "content": {
                                 "application/json": {
                                     "schema": {"$ref": schema_ref}
@@ -592,16 +593,23 @@ def main():
     extractor = CppTypeExtractor()
     extracted_types = extractor.extract_from_file(str(sample_file))
     
-    print(f"📊 Extracted {len(extracted_types)} types:")
-    for t in extracted_types:
-        print(f"  - {t.name} ({t.type_kind})")
+    # Convert C++ types to PolyglotType objects
+    converter = CppToPolyglotConverter()
+    polyglot_types = []
+    for name, cpp_type in extracted_types.items():
+        poly_type = converter.convert(cpp_type)
+        polyglot_types.append(poly_type)
+    
+    print(f"📊 Extracted {len(polyglot_types)} types:")
+    for t in polyglot_types:
+        print(f"  - {t.canonical_name} ({t.kind})")
     
     # Generate bindings
     output_dir = Path(__file__).parent / "generated_bindings"
     orchestrator = BindingOrchestrator(output_dir)
     
     print(f"\n🔧 Generating bindings in {output_dir}...")
-    orchestrator.generate_all_bindings(extracted_types, "sample_module")
+    orchestrator.generate_all_bindings(polyglot_types, "sample_module")
     
     print(f"\n📁 Generated files:")
     for file_path in output_dir.iterdir():
